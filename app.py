@@ -1,317 +1,445 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import sys
+import os
 
 # -----------------------------------------------------------------------------
-# 1. 메인 대시보드 설정 및 스타일
+# 1. 페이지 설정 및 상태 관리
 # -----------------------------------------------------------------------------
 def run_dashboard():
-    st.set_page_config(page_title="DCSS 시즌 결산 (Final Ver.)", page_icon="🛡️", layout="wide")
+    st.set_page_config(page_title="DCSS: 죽음의 기록", page_icon="🩸", layout="wide")
+    
+    # 상태 초기화
+    if 'page' not in st.session_state:
+        st.session_state.page = 'intro'
+    if 'selected_chapter' not in st.session_state:
+        st.session_state.selected_chapter = None
 
+    # -------------------------------------------------------------------------
+    # 2. 커스텀 CSS (가독성 개선 & 3단계 구조)
+    # -------------------------------------------------------------------------
     st.markdown("""
         <style>
-        .block-container { padding-top: 1rem; }
-        div[data-testid="metric-container"] {
-            background-color: #f0f2f6;
-            border: 1px solid #d6d9df;
-            padding: 15px;
-            border-radius: 10px;
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Roboto:wght@300;400;700&display=swap');
+        
+        /* [전체 테마] */
+        .stApp {
+            background-color: #0b0c10;
+            color: #e0e0e0;
+            font-family: 'Roboto', sans-serif;
+        }
+        
+        /* [타이틀] */
+        h1, h2, h3 {
+            font-family: 'Cinzel', serif !important;
+            color: #ff4d4d !important;
+            text-shadow: 0 0 10px rgba(184, 46, 46, 0.5);
             text-align: center;
         }
-        @media (prefers-color-scheme: dark) {
-            div[data-testid="metric-container"] {
-                background-color: #262730;
-                border: 1px solid #41444b;
-            }
+        
+        /* [챕터 카드] */
+        .chapter-card {
+            background-color: #1f2833;
+            border: 2px solid #45a29e;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            height: 100%;
+        }
+        .chapter-card:hover {
+            transform: translateY(-5px);
+            border-color: #66fcf1;
+            background-color: #2b3645;
+            box-shadow: 0 0 20px rgba(102, 252, 241, 0.3);
+        }
+        
+        /* [버튼 스타일] */
+        div.stButton > button {
+            width: 100%;
+            background-color: #1f2833;
+            color: #66fcf1;
+            border: 1px solid #45a29e;
+            font-weight: bold;
+            padding: 10px;
+            transition: 0.2s;
+        }
+        div.stButton > button:hover {
+            background-color: #66fcf1;
+            color: #0b0c10;
+            border-color: #66fcf1;
+        }
+        
+        /* [메트릭 박스] */
+        div[data-testid="metric-container"] {
+            background-color: rgba(31, 40, 51, 0.9);
+            border: 1px solid #45a29e;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        label[data-testid="stMetricLabel"] {
+            color: #66fcf1 !important;
+        }
+        div[data-testid="stMetricValue"] {
+            color: #ffffff !important;
+        }
+
+        /* [몬스터 카드] */
+        .mob-card {
+            background-color: #1a1a1a;
+            border-left: 4px solid #b82e2e;
+            border-bottom: 1px solid #333;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .floor-tag {
+            font-family: 'Cinzel', serif;
+            font-weight: bold;
+            color: #66fcf1;
+            font-size: 1.2rem;
+            margin-right: 10px;
+        }
+        .killer-name {
+            font-size: 1.3rem;
+            color: #ffcccc;
+            font-weight: bold;
+        }
+        .sub-killers {
+            font-size: 0.9rem;
+            color: #a0a0a0;
         }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🛡️ Dungeon Crawl: 종합 분석 리포트")
-    st.markdown("---")
-
     # -------------------------------------------------------------------------
-    # 2. 데이터 로드 및 전처리
+    # 3. 데이터 로드 및 전처리
     # -------------------------------------------------------------------------
     @st.cache_data
     def load_data():
         try:
+            if not os.path.exists('crawllog.csv'): return None, None
             df = pd.read_csv('crawllog.csv')
             
-            # 1. 결측치 처리
-            if 'god' in df.columns: 
-                df['god'] = df['god'].fillna('No God')
-            if 'killer' in df.columns: 
-                df['killer'] = df['killer'].fillna('Unknown')
-                
-            # 2. 승리 여부 판단
+            if 'god' in df.columns: df['god'] = df['god'].fillna('No God')
+            if 'killer' in df.columns: df['killer'] = df['killer'].fillna('Unknown')
+            
             cond1 = df['ktyp'].astype(str) == 'winning'
             cond2 = df['tmsg'].astype(str).str.lower().str.contains('escaped', na=False)
             df['is_win'] = cond1 | cond2
+            
+            df['race_grouped'] = df['race'].apply(lambda x: 'Draconian' if 'Draconian' in str(x) else x)
 
-            # 3. 드라코니언 통합
-            df['race_grouped'] = df['race'].apply(lambda x: 'Draconian (All)' if 'Draconian' in str(x) else x)
-
-            # 4. 사망 지역 표기 정리 (D만 층수 표기, 나머지는 지역명만)
             def format_place(row):
                 place = row['place']
                 lvl = row['lvl']
-                if place == 'D' and pd.notnull(lvl):
-                    return f"D:{int(lvl)}"
-                return place
-            
+                if place == 'D' and pd.notnull(lvl): return f"D:{int(lvl)}"
+                return str(place)
             df['formatted_place'] = df.apply(format_place, axis=1)
-
-            # 5. 순수 사망 데이터 (분석용)
-            exclude_killers = ['winning', 'quit', 'user', 'leaving', 'wizmode', 'starvation', 'Unknown', 'miscast']
-            df_death = df[~df['killer'].isin(exclude_killers)].copy()
-
+            
+            exclude = ['winning', 'quit', 'user', 'leaving', 'wizmode', 'starvation', 'Unknown', 'miscast']
+            df_death = df[~df['killer'].isin(exclude)].copy()
+            
             return df, df_death
-        except Exception as e:
-            st.error(f"데이터 로드 중 오류 발생: {e}")
-            return None, None
+        except: return None, None
 
     df, df_death = load_data()
-    if df is None: return
+    if df is None:
+        st.error("❌ 'crawllog.csv' 파일이 없습니다.")
+        return
 
-    # -------------------------------------------------------------------------
-    # 3. 상단 핵심 지표 (Metrics)
-    # -------------------------------------------------------------------------
-    total_games = len(df)
-    total_wins = df['is_win'].sum()
-    win_rate = (total_wins / total_games) * 100
-    
-    top_race = df['race_grouped'].mode()[0]
-    top_race_count = df['race_grouped'].value_counts().iloc[0]
-    
-    top_killer = df_death['killer'].mode()[0]
-    top_killer_count = df_death['killer'].value_counts().iloc[0]
+    def get_img_path(name):
+        if not os.path.exists("assets"): return None
+        filename = f"{name.lower().replace(' ', '_')}.png"
+        filepath = os.path.join("assets", filename)
+        if os.path.exists(filepath): return filepath
+        return None
 
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    col_m1.metric("총 플레이 수", f"{total_games:,}회")
-    col_m2.metric("총 클리어 (승률)", f"{total_wins:,}회", f"{win_rate:.2f}%")
-    col_m3.metric("최다 픽 종족", f"{top_race}", f"{top_race_count}회 선택")
-    col_m4.metric("최다 사망 원인", f"{top_killer}", f"{top_killer_count}회 발생")
-
-    st.markdown("---")
-
-    # -------------------------------------------------------------------------
-    # 4. 공통 차트 함수 (컬러바 숨김 & 텍스트 잘림 방지)
-    # -------------------------------------------------------------------------
-    def plot_bar_chart(data, x_col, y_col, title, color_scale, top_n=10):
-        counts = data[y_col].value_counts(normalize=True) * 100
-        top_data = counts.head(top_n).reset_index()
-        top_data.columns = [y_col, x_col]
-        
-        fig = px.bar(top_data, x=x_col, y=y_col, orientation='h', text=x_col,
-                     title=title, color=x_col, color_continuous_scale=color_scale)
-        
+    def plot_bar_dark(data, x, y, title, color_scale):
+        fig = px.bar(data, x=x, y=y, orientation='h', text=x, title=title,
+                     color=x, color_continuous_scale=color_scale)
+        fig.update_layout(template="plotly_dark", 
+                          plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                          font=dict(color='#e0e0e0', size=14),
+                          yaxis=dict(autorange="reversed", title=""),
+                          xaxis=dict(title="", showticklabels=False),
+                          coloraxis_showscale=False, margin=dict(r=20))
         fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        
-        max_val = top_data[x_col].max()
-        fig.update_layout(
-            yaxis=dict(autorange="reversed", title=""),
-            xaxis=dict(title="비율 (%)", range=[0, max_val * 1.3]), # 여유 공간 30%
-            margin=dict(r=20),
-            coloraxis_showscale=False
-        )
         return fig
 
     # -------------------------------------------------------------------------
-    # 5. 선호도 분석 (Preferences)
+    # 4. 화면 라우팅
     # -------------------------------------------------------------------------
-    st.header("📊 1. 선호도 분석 (Preferences)")
     
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.plotly_chart(plot_bar_chart(df, 'Ratio', 'race_grouped', "🧬 종족 선호도", 'Blues'), use_container_width=True)
-
-    with c2:
-        st.plotly_chart(plot_bar_chart(df, 'Ratio', 'cls', "⚔️ 직업 선호도", 'Purples'), use_container_width=True)
-
-    with c3:
-        df_god_filtered = df[df['god'] != 'No God']
-        st.plotly_chart(plot_bar_chart(df_god_filtered, 'Ratio', 'god', "🙏 신앙 선호도 (무교 제외)", 'Greens'), use_container_width=True)
-
-    # -------------------------------------------------------------------------
-    # [NEW] 1.5. 종족별 신앙 선택 (Heatmap)
-    # -------------------------------------------------------------------------
-    st.subheader("🧩 종족별 신앙 선택 비율 (미노타우르스 제외)")
-    st.caption("각 종족이 어떤 신을 주로 선택하는지 비율(%)로 보여줍니다. (표본 과다인 미노타우르스 및 무교 제외)")
-
-    # 데이터 필터링 (미노타우르스 제외, 무교 제외)
-    df_heatmap = df[(df['race'] != 'Minotaur') & (df['god'] != 'No God')]
-    
-    # 1. 교차표 생성 (Count)
-    ct = pd.crosstab(df_heatmap['race_grouped'], df_heatmap['god'])
-    
-    # 2. 비율 변환 (각 종족 내에서 해당 신앙 선택 비율, row 기준 합 100%)
-    ct_norm = ct.div(ct.sum(axis=1), axis=0) * 100
-    
-    # 3. 데이터가 너무 적은 종족 제거 (노이즈 방지, 최소 5회 이상 플레이된 종족만)
-    race_counts = df_heatmap['race_grouped'].value_counts()
-    valid_races = race_counts[race_counts >= 5].index
-    ct_norm = ct_norm.loc[valid_races]
-
-    # 4. 히트맵 시각화
-    if not ct_norm.empty:
-        fig_heat = px.imshow(ct_norm, text_auto='.0f', aspect="auto",
-                             labels=dict(x="신앙", y="종족", color="비율(%)"),
-                             color_continuous_scale='Viridis')
-        
-        fig_heat.update_layout(
-            height=600, 
-            coloraxis_showscale=False, # 컬러바 숨김
-            xaxis_title="", 
-            yaxis_title=""
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
-    else:
-        st.info("조건에 맞는 데이터가 부족합니다.")
-
-    # -------------------------------------------------------------------------
-    # 6. 사망 분석 (Deep Dive)
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.header("💀 2. 죽음의 기록 (Death Analysis)")
-    
-    # 6-1. 사망 원인 및 돌연사
-    col_d1, col_d2 = st.columns(2)
-
-    with col_d1:
-        st.subheader("주요 사망 원인 Top 10")
-        st.plotly_chart(plot_bar_chart(df_death, 'Ratio', 'killer', "", 'Reds'), use_container_width=True)
-
-    with col_d2:
-        st.subheader("💥 돌연사(One-shot) 유발 원인")
-        st.caption("사망 턴 데미지(tdam)가 최대 체력(mhp) 이상인 경우")
-        
-        sudden_death = df_death[df_death['tdam'] >= df_death['mhp']]
-        if not sudden_death.empty:
-            sd_counts = sudden_death['killer'].value_counts().head(10).reset_index()
-            sd_counts.columns = ['유발 원인', '횟수']
+    # [PAGE 1] 인트로
+    if st.session_state.page == 'intro':
+        _, col_center, _ = st.columns([1, 8, 1])
+        with col_center:
+            st.markdown("<h1 style='font-size: 3.5rem;'>🩸 DUNGEON CRAWL</h1>", unsafe_allow_html=True)
+            st.markdown("<h3 style='color: #a0a0a0 !important;'>The Archive of Deaths and Glory</h3>", unsafe_allow_html=True)
+            st.markdown("---")
             
-            fig_sd = px.bar(sd_counts, x='횟수', y='유발 원인', orientation='h', text='횟수',
-                            color='횟수', color_continuous_scale='Oranges')
-            fig_sd.update_traces(textposition='outside')
-            fig_sd.update_layout(
-                yaxis=dict(autorange="reversed", title=""),
-                xaxis=dict(title="발생 횟수", range=[0, sd_counts['횟수'].max() * 1.2]),
-                coloraxis_showscale=False
-            )
-            st.plotly_chart(fig_sd, use_container_width=True)
-        else:
-            st.info("돌연사 데이터가 충분하지 않습니다.")
+            main_img = get_img_path("main_banner") 
+            if main_img: st.image(main_img, use_container_width=True)
+            else: st.info("assets 폴더에 이미지를 추가하면 더 멋진 화면이 됩니다.")
 
-    # 6-2. 지역 및 레벨 분포
-    col_d3, col_d4 = st.columns(2)
-    
-    with col_d3:
-        st.subheader("📍 사망 지역 분포 (Treemap)")
-        place_counts = df_death['formatted_place'].value_counts().reset_index()
-        place_counts.columns = ['Place', 'Count']
-        top_places = place_counts.head(40) 
+            st.markdown("---")
+
+            total_games = len(df)
+            total_wins = df['is_win'].sum()
+            win_rate = (total_wins / total_games) * 100
+            top_race = df['race_grouped'].mode()[0]
+            top_killer = df_death['killer'].mode()[0]
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("총 원정", f"{total_games:,}")
+            m2.metric("승률", f"{win_rate:.2f}%")
+            m3.metric("최다 픽", top_race)
+            m4.metric("최다 사망", top_killer)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            if st.button("💀 NEXT CHAPTER (챕터 선택)", type="primary"):
+                st.session_state.page = 'chapter_select'
+                st.rerun()
+            
+            st.markdown("<div style='text-align:center; margin-top:20px;'><a href='https://crawl.nemelex.cards/#lobby' style='color:#66fcf1; text-decoration:none;'>🔗 한국 DCSS 웹서버 바로가기</a></div>", unsafe_allow_html=True)
+
+    # [PAGE 2] 챕터 선택
+    elif st.session_state.page == 'chapter_select':
+        st.markdown("<h1>📜 ARCHIVES</h1>", unsafe_allow_html=True)
+        st.markdown("<h3>분석하고 싶은 기록을 선택하십시오</h3>", unsafe_allow_html=True)
+        st.markdown("---")
         
-        fig_tree = px.treemap(top_places, path=['Place'], values='Count',
-                              color='Count', color_continuous_scale='Oranges')
-        fig_tree.update_traces(textinfo="label+value+percent entry")
-        fig_tree.update_layout(margin=dict(t=30, l=0, r=0, b=0), coloraxis_showscale=False)
-        st.plotly_chart(fig_tree, use_container_width=True)
-
-    with col_d4:
-        st.subheader("📉 사망 레벨(XL) 분포")
-        fig_xl = px.histogram(df_death, x="xl", nbins=27, 
-                              labels={'xl': '레벨 (XL)'}, color_discrete_sequence=['#FF5733'])
-        fig_xl.update_layout(bargap=0.1, xaxis_title="캐릭터 레벨", yaxis_title="사망자 수")
-        st.plotly_chart(fig_xl, use_container_width=True)
-
-    # 6-3. 층별 지배자 (테이블)
-    st.subheader("👹 층별 최다 사망 원인 (Most Dangerous Mobs)")
-    with st.expander("층별 데이터 열기/닫기", expanded=False):
-        def get_sort_key(place_str):
-            if place_str.startswith("D:"):
-                return (0, int(place_str.split(":")[1]))
-            elif place_str == "D": return (0, 0)
-            elif "Lair" in place_str: return (1, 0)
-            elif "Orc" in place_str: return (2, 0)
-            elif "Elf" in place_str: return (3, 0)
-            elif "Snake" in place_str: return (4, 0)
-            elif "Spider" in place_str: return (5, 0)
-            elif "Shoals" in place_str: return (6, 0)
-            elif "Swamp" in place_str: return (7, 0)
-            elif "Slime" in place_str: return (8, 0)
-            elif "Vaults" in place_str: return (9, 0)
-            elif "Crypt" in place_str: return (10, 0)
-            elif "Depths" in place_str: return (11, 0)
-            elif "Zot" in place_str: return (12, 0)
-            else: return (99, 0)
-
-        floor_killer = df_death.groupby('formatted_place')['killer'].agg(
-            lambda x: x.value_counts().index[0] if len(x) > 0 else "None"
-        ).reset_index()
-        floor_count = df_death.groupby('formatted_place')['killer'].agg(
-            lambda x: x.value_counts().iloc[0] if len(x) > 0 else 0
-        ).reset_index(name='Count')
+        c1, c2, c3 = st.columns(3)
         
-        result = pd.merge(floor_killer, floor_count, on='formatted_place')
-        result.columns = ['장소', '최다 사망 원인', '해당 원인 사망수']
-        
-        result['sort_key'] = result['장소'].apply(get_sort_key)
-        result = result.sort_values('sort_key').drop('sort_key', axis=1)
-        
-        st.dataframe(result, use_container_width=True, hide_index=True)
+        with c1:
+            st.markdown("""
+            <div class="chapter-card">
+                <h2 style="color: #66fcf1 !important;">① 선호도 분석</h2>
+                <p style="color: #ccc;">어떤 종족, 직업, 신앙이<br>가장 많은 사랑을 받았는가?</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Go to Chapter 1", key="btn_c1"):
+                st.session_state.page = 'analysis'
+                st.session_state.selected_chapter = 'ch1'
+                st.rerun()
 
-    # -------------------------------------------------------------------------
-    # 7. 승률 분석
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.header("🏆 3. 승률 (Win Rate) Top 10")
+        with c2:
+            st.markdown("""
+            <div class="chapter-card" style="border-color: #ff4d4d;">
+                <h2 style="color: #ff4d4d !important;">② 죽음의 기록</h2>
+                <p style="color: #ccc;">어디서, 누구에게, 왜 죽었는가?<br>생존을 위한 필수 지침서</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Go to Chapter 2", key="btn_c2"):
+                st.session_state.page = 'analysis'
+                st.session_state.selected_chapter = 'ch2'
+                st.rerun()
 
-    tab1, tab2 = st.tabs(["🧬 종족별 승률", "⚔️ 직업별 승률"])
+        with c3:
+            st.markdown("""
+            <div class="chapter-card" style="border-color: #ffd700;">
+                <h2 style="color: #ffd700 !important;">③ 승률 분석</h2>
+                <p style="color: #ccc;">가장 강력한 생존 조합은?<br>승리를 부르는 선택</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Go to Chapter 3", key="btn_c3"):
+                st.session_state.page = 'analysis'
+                st.session_state.selected_chapter = 'ch3'
+                st.rerun()
 
-    def plot_win_rate(group_col, title, color_scale, min_games=5):
-        stats = df.groupby(group_col).agg(
-            Plays=('is_win', 'count'),
-            Wins=('is_win', 'sum')
-        ).reset_index()
-        stats['WinRate'] = (stats['Wins'] / stats['Plays']) * 100
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        if st.button("⬅️ 처음으로 돌아가기"):
+            st.session_state.page = 'intro'
+            st.rerun()
+
+    # [PAGE 3] 상세 분석
+    elif st.session_state.page == 'analysis':
         
-        top_stats = stats[stats['Plays'] >= min_games].sort_values('WinRate', ascending=False).head(10)
+        col_nav1, col_nav2 = st.columns([1, 8])
+        with col_nav1:
+            if st.button("🔙 뒤로"):
+                st.session_state.page = 'chapter_select'
+                st.rerun()
         
-        fig = px.bar(top_stats, x='WinRate', y=group_col, orientation='h', text='WinRate',
-                     title=title, color='WinRate', color_continuous_scale=color_scale)
-        
-        fig.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-        
-        max_val = top_stats['WinRate'].max() if not top_stats.empty else 10
-        fig.update_layout(
-            yaxis=dict(autorange="reversed", title=""),
-            xaxis=dict(title="승률 (%)", range=[0, max_val * 1.25]),
-            margin=dict(r=20),
-            coloraxis_showscale=False
-        )
-        return fig
+        # ---------------------------------------------------------------------
+        # 챕터 1: 선호도
+        # ---------------------------------------------------------------------
+        if st.session_state.selected_chapter == 'ch1':
+            st.header("📊 챕터 1: 모험가들의 취향")
+            
+            # 상단 그래프 3개 병렬 배치
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("#### 🧬 종족 선호도")
+                cnt = df['race_grouped'].value_counts(normalize=True)*100
+                top = cnt.head(10).reset_index()
+                top.columns = ['Race', 'Ratio']
+                st.plotly_chart(plot_bar_dark(top, 'Ratio', 'Race', "", 'Blues'), use_container_width=True)
+            with col2:
+                st.markdown("#### ⚔️ 직업 선호도")
+                cnt = df['cls'].value_counts(normalize=True)*100
+                top = cnt.head(10).reset_index()
+                top.columns = ['Class', 'Ratio']
+                st.plotly_chart(plot_bar_dark(top, 'Ratio', 'Class', "", 'Purples'), use_container_width=True)
+            with col3:
+                st.markdown("#### 🙏 신앙 선호도")
+                df_god = df[df['god'] != 'No God']
+                cnt = df_god['god'].value_counts(normalize=True)*100
+                top = cnt.head(10).reset_index()
+                top.columns = ['God', 'Ratio']
+                st.plotly_chart(plot_bar_dark(top, 'Ratio', 'God', "", 'Greens'), use_container_width=True)
 
-    with tab1:
-        st.plotly_chart(plot_win_rate('race_grouped', "종족별 승률 (최소 5판)", 'Teal'), use_container_width=True)
+            # 히트맵 (하단 복구)
+            st.markdown("---")
+            st.subheader("🧩 종족별 신앙 성향 ")
+            
+            df_heat = df[(df['race'] != 'Minotaur') & (df['god'] != 'No God')]
+            ct = pd.crosstab(df_heat['race_grouped'], df_heat['god'])
+            ct_norm = ct.div(ct.sum(axis=1), axis=0) * 100
+            valid = df_heat['race_grouped'].value_counts()[df_heat['race_grouped'].value_counts() >= 5].index
+            ct_norm = ct_norm.loc[valid]
+            
+            fig = px.imshow(ct_norm, text_auto='.0f', aspect="auto", color_continuous_scale='Viridis',
+                            labels=dict(x="신앙", y="종족", color="비율(%)"))
+            fig.update_layout(template="plotly_dark", height=600, coloraxis_showscale=False,
+                                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
 
-    with tab2:
-        st.plotly_chart(plot_win_rate('cls', "직업별 승률 (최소 5판)", 'Magenta'), use_container_width=True)
+        # ---------------------------------------------------------------------
+        # 챕터 2: 죽음의 기록
+        # ---------------------------------------------------------------------
+        elif st.session_state.selected_chapter == 'ch2':
+            st.header("💀 챕터 2: 죽음의 기록")
+            
+            tab1, tab2 = st.tabs(["📉 통계 요약", "👹 층별 위험 몬스터 (상세)"])
+            
+            with tab1:
+                # 1열: 사망 원인 / 돌연사
+                c1, c2 = st.columns(2)
+                with c1:
+                    cnt = df_death['killer'].value_counts(normalize=True)*100
+                    top = cnt.head(10).reset_index()
+                    top.columns = ['Killer', 'Ratio']
+                    st.plotly_chart(plot_bar_dark(top, 'Ratio', 'Killer', "최다 사망 원인 Top 10", 'Reds'), use_container_width=True)
+                with c2:
+                    sudden = df_death[df_death['tdam'] >= df_death['mhp']]
+                    if not sudden.empty:
+                        cnt = sudden['killer'].value_counts().head(10).reset_index()
+                        cnt.columns = ['Killer', 'Count']
+                        fig = px.bar(cnt, x='Count', y='Killer', orientation='h', text='Count', 
+                                     title="돌연사 원인 (One-shot)", color='Count', color_continuous_scale='Oranges')
+                        fig.update_layout(template="plotly_dark", coloraxis_showscale=False, 
+                                          plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                          font=dict(color='#e0e0e0'), yaxis=dict(autorange="reversed"), xaxis=dict(title="횟수"))
+                        st.plotly_chart(fig, use_container_width=True)
 
+                # 2열 (누락되었던 부분 복구): 사망 지역 / 사망 레벨
+                c3, c4 = st.columns(2)
+                with c3:
+                    st.subheader("📍 사망 지역 분포")
+                    place_cnt = df_death['formatted_place'].value_counts().reset_index()
+                    place_cnt.columns = ['Place', 'Count']
+                    fig_tree = px.treemap(place_cnt.head(30), path=['Place'], values='Count', 
+                                          color='Count', color_continuous_scale='Reds')
+                    fig_tree.update_layout(template="plotly_dark", margin=dict(t=0, l=0, r=0, b=0))
+                    st.plotly_chart(fig_tree, use_container_width=True)
+                
+                with c4:
+                    st.subheader("📉 사망 레벨(XL) 분포")
+                    fig_xl = px.histogram(df_death, x="xl", nbins=27, 
+                                          labels={'xl': '레벨 (XL)'}, color_discrete_sequence=['#ff4d4d'])
+                    fig_xl.update_layout(template="plotly_dark", bargap=0.1, 
+                                         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                         yaxis_title="사망자 수")
+                    st.plotly_chart(fig_xl, use_container_width=True)
+
+            with tab2:
+                st.subheader("👹 층별 지배자 (The Lords of Floors)")
+                
+                zone_tabs = st.tabs(["🌱 초반 (Early)", "⚔️ 중반 (Mid)", "🔥 후반 (Late)"])
+                zones = {
+                    "🌱 초반 (Early)": ["D:1", "D:2", "D:3", "D:4", "D:5", "D:6", "D:7", "D:8", "D:9", "D:10", "D:11", "D:12", "D:13", "D:14", "D:15", "Temple"],
+                    "⚔️ 중반 (Mid)": ["Lair", "Orc", "Snake", "Spider", "Shoals", "Swamp"],
+                    "🔥 후반 (Late)": ["Vaults", "Depths", "Elf", "Crypt", "Slime", "Zot", "Hell", "Pan", "Tomb", "Abyss"]
+                }
+
+                for tab, (zone_name, places) in zip(zone_tabs, zones.items()):
+                    with tab:
+                        target_places = []
+                        for p in places:
+                            found = df_death[df_death['formatted_place'].astype(str).str.contains(p, regex=False)]['formatted_place'].unique()
+                            target_places.extend(found)
+                        
+                        target_places = sorted(list(set(target_places)), key=lambda s: (0, int(s.split(":")[1])) if "D:" in s else (1, s))
+
+                        if not target_places:
+                            st.info("데이터 없음")
+                            continue
+
+                        for place in target_places:
+                            floor_data = df_death[df_death['formatted_place'] == place]
+                            if floor_data.empty: continue
+                            
+                            killers = floor_data['killer'].value_counts()
+                            top1 = killers.index[0]
+                            count1 = killers.iloc[0]
+                            subs = [f"{killers.index[i]}" for i in range(1, min(3, len(killers)))]
+                            sub_text = ", ".join(subs) if subs else "없음"
+                            img_path = get_img_path(top1)
+                            danger_idx = "🩸" if count1 < 50 else ("🩸🩸" if count1 < 100 else "💀💀💀")
+
+                            with st.container():
+                                c_img, c_info, c_stat = st.columns([1, 4, 1.5])
+                                with c_img:
+                                    if img_path: st.image(img_path, width=50)
+                                    else: st.markdown("<div style='font-size:25px;text-align:center'>👾</div>", unsafe_allow_html=True)
+                                with c_info:
+                                    st.markdown(f"""
+                                        <div class="mob-card">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <div>
+                                                    <span class="floor-tag">{place}</span>
+                                                    <span class="killer-name">{top1}</span>
+                                                    <div class="sub-killers">Beware: {sub_text}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    """, unsafe_allow_html=True)
+                                with c_stat:
+                                    st.markdown(f"""
+                                        <div style="text-align:right; margin-top:5px;">
+                                            <div style="font-size:1.4rem; color:#ff4d4d; font-weight:bold;">{count1} Kills</div>
+                                            <div style="font-size:0.8rem; color:#888;">{danger_idx}</div>
+                                        </div>
+                                    """, unsafe_allow_html=True)
+
+        # ---------------------------------------------------------------------
+        # 챕터 3: 승률 분석
+        # ---------------------------------------------------------------------
+        elif st.session_state.selected_chapter == 'ch3':
+            st.header("🏆 챕터 3: 생존의 법칙 (승률)")
+            st.info("")
+
+            def get_win_stats(col):
+                s = df.groupby(col).agg(Plays=('is_win','count'), Wins=('is_win','sum')).reset_index()
+                s['WinRate'] = (s['Wins']/s['Plays'])*100
+                return s[s['Plays']>=5].sort_values('WinRate', ascending=False).head(10)
+
+            t1, t2, t3 = st.tabs(["🧬 종족별", "⚔️ 직업별", "🙏 신앙별"])
+            
+            with t1:
+                st.plotly_chart(plot_bar_dark(get_win_stats('race_grouped'), 'WinRate', 'race_grouped', "", 'Teal'), use_container_width=True)
+            with t2:
+                st.plotly_chart(plot_bar_dark(get_win_stats('cls'), 'WinRate', 'cls', "", 'Magenta'), use_container_width=True)
+            with t3:
+                df_god_only = df[df['god'] != 'No God']
+                s = df_god_only.groupby('god').agg(Plays=('is_win','count'), Wins=('is_win','sum')).reset_index()
+                s['WinRate'] = (s['Wins']/s['Plays'])*100
+                data = s[s['Plays']>=5].sort_values('WinRate', ascending=False).head(10)
+                st.plotly_chart(plot_bar_dark(data, 'WinRate', 'god', "", 'YlOrBr'), use_container_width=True)
 
 if __name__ == "__main__":
-    is_streamlit_running = False
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-        if get_script_run_ctx(): is_streamlit_running = True
-    except ImportError: pass
-
-    if is_streamlit_running:
-        run_dashboard()
-    else:
-        print("Streamlit 서버를 시작합니다...")
-        import subprocess
-        cmd = [sys.executable, "-m", "streamlit", "run", __file__]
-        subprocess.run(cmd)
+    run_dashboard()
